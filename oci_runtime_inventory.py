@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import zlib
 import hashlib
 import io
 import json
@@ -225,6 +226,8 @@ def layer_entries(stream, budget, layer_digest):
             if basename == ".wh..wh..opq":
                 opaque_dirs.add(directory)
             else:
+                if not basename[4:]:
+                    raise InventoryError("invalid_whiteout")
                 removals.add(safe_path((directory + "/" if directory else "") + basename[4:]))
             # Track normalized whiteout names too, rejecting duplicate markers.
             entries[path] = ("whiteout", None, layer_digest)
@@ -427,7 +430,7 @@ def scan_archive(path, report, budget):
             except InventoryError as exc:
                 image["notes"].append(str(exc))
                 report["complete"] = False
-            except (OSError, EOFError, ValueError):
+            except (OSError, EOFError, ValueError, zlib.error):
                 image["notes"].append("image_invalid_or_unavailable")
                 report["complete"] = False
             report["images"].append(image)
@@ -451,7 +454,7 @@ def scan_sbom(path, report, budget):
         if not isinstance(metadata, dict):
             raise InventoryError("invalid_sbom_metadata")
         if "component" in metadata:
-            pending.append(([metadata["component"]], "metadata/component"))
+            pending.append(([metadata["component"]], None))
     elif isinstance(data.get("spdxVersion"), str) and data["spdxVersion"] in {"SPDX-2.2", "SPDX-2.3"}:
         pending.append((data.get("packages", []), "packages"))
         version_key = "versionInfo"
@@ -466,7 +469,7 @@ def scan_sbom(path, report, budget):
             count += 1
             if count > 10000 or not isinstance(entry, dict):
                 raise InventoryError("invalid_or_excessive_sbom_components")
-            location = prefix + "/" + str(index)
+            location = prefix + "/" + str(index) if prefix is not None else "metadata/component"
             name = entry.get("name", "")
             if not isinstance(name, str):
                 raise InventoryError("invalid_sbom_component_name")
@@ -483,6 +486,17 @@ def scan_sbom(path, report, budget):
 
 
 def export_inventory(report, consumer):
+    output = _export_inventory(report, consumer)
+    if consumer != "canonical":
+        records = output["records"] if consumer == "sharp" else output
+        maximum = 1000 if consumer == "sharp" else 10000
+        byte_maximum = 16 * 1024**2 if consumer == "flowise" else 4 * 1024**2
+        if len(records) > maximum or len(json.dumps(output, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")) + 1 > byte_maximum:
+            raise InventoryError("consumer_export_limit_use_canonical_or_split_inputs")
+    return output
+
+
+def _export_inventory(report, consumer):
     rows = [row for image in [*report["images"], *report.get("sboms", [])] if image["coverage_complete"] for row in image["components"]]
     def version(row, maximum=512):
         value = row["version"]
@@ -573,7 +587,7 @@ def main(argv=None):
         except InventoryError as exc:
             report["complete"] = False
             report["notes"].append(str(exc))
-        except (OSError, EOFError, ValueError):
+        except (OSError, EOFError, ValueError, zlib.error):
             report["complete"] = False
             report["notes"].append("input_invalid_or_unavailable")
         report["usage"] = {name: getattr(budget, name) for name in ["raw", "expanded", "members", "capture"]}

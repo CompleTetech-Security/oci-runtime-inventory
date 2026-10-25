@@ -103,3 +103,9 @@ network dependency is introduced.
 
 [AGENTS](AGENTS.md), [contribution terms](CONTRIBUTING.md), [security policy](SECURITY.md),
 [AGPL license](LICENSE), [dual licensing](LICENSING.md), [brand policy](BRAND_ASSETS.md).
+
+Consumer exports are bounded by the destination input contract: Sharp 1,000
+records/four MiB, Node2Shell 10,000 records/four MiB, Flowise 10,000 records/16 MiB.
+An oversized merged export fails before publication; use canonical output or split
+the source inputs explicitly. No records are silently truncated. CycloneDX subject
+component provenance uses `metadata/component` without an invented array index.

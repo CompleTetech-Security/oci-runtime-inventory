@@ -73,6 +73,28 @@ class InventoryTests(unittest.TestCase):
             code, out, err = self.cli("--archive", str(path), *args)
             return code, json.loads(out), err
 
+    def test_copilot_whiteout_deflate_provenance_and_consumer_bounds(self):
+        code, report, _ = self.scan(docker_archive([tar_bytes([("app/package.json", package())]), tar_bytes([("app/.wh.", b"")])]))
+        self.assertEqual(2, code)
+        self.assertEqual([], report["images"][0]["components"])
+        raw = docker_archive([tar_bytes([("app/package.json", package())])])
+        with mock.patch.object(c, "layer_entries", side_effect=c.zlib.error("bad DEFLATE")):
+            code, report, _ = self.scan(raw)
+            self.assertEqual(2, code)
+            self.assertEqual("image_invalid_or_unavailable", report["images"][0]["notes"][0])
+        row = dict(name="sharp", version="0.35.5")
+        report = dict(images=[], sboms=[dict(coverage_complete=True, components=[row] * 1001)])
+        with self.assertRaises(c.InventoryError): c.export_inventory(report, "sharp")
+        self.assertEqual(report, c.export_inventory(report, "canonical"))
+        report["sboms"][0]["components"] = [dict(name="nodejs", version="24.22.0")] * 10001
+        with self.assertRaises(c.InventoryError): c.export_inventory(report, "node2shell")
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"sbom.json"
+            path.write_text(json.dumps(dict(bomFormat="CycloneDX", specVersion="1.6", metadata=dict(component=dict(name="sharp", version="0.35.5")))),encoding="utf-8")
+            report=dict(images=[],sboms=[])
+            c.scan_sbom(path,report,c.Budget(512*1024**2))
+            self.assertEqual("metadata/component",report["sboms"][0]["components"][0]["path"])
+
     def test_docker_and_oci_plain_gzip_layers_have_digest_layer_file_provenance(self):
         layer = tar_bytes([("app/node_modules/sharp/package.json", package()), ("app/node_modules/flowise/package.json", package("flowise", "3.1.3"))])
         for archive in [docker_archive([layer]), oci_archive([layer]), oci_archive([layer], compressed=True)]:
