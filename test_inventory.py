@@ -73,6 +73,17 @@ class InventoryTests(unittest.TestCase):
             code, out, err = self.cli("--archive", str(path), *args)
             return code, json.loads(out), err
 
+    def test_each_layer_rejects_inaccessible_metadata_and_serialized_unicode_limit(self):
+        code, report, _ = self.scan(docker_archive([
+            tar_bytes([("app", b"", tarfile.SYMTYPE), ("app/package.json", package())]),
+            tar_bytes([("app", b"", tarfile.DIRTYPE)]),
+        ]))
+        self.assertEqual(2,code)
+        self.assertEqual([],report["images"][0]["components"])
+        row=dict(name="nodejs",version="α"*512)
+        value=dict(images=[],sboms=[dict(coverage_complete=True,components=[row]*1400)])
+        with self.assertRaises(c.InventoryError): c.export_inventory(value,"node2shell")
+
     def test_copilot_whiteout_deflate_provenance_and_consumer_bounds(self):
         code, report, _ = self.scan(docker_archive([tar_bytes([("app/package.json", package())]), tar_bytes([("app/.wh.", b"")])]))
         self.assertEqual(2, code)

@@ -354,6 +354,15 @@ def image_plans(stream, index, budget):
     return plans
 
 
+def validate_selected_ancestors(filesystem):
+    for path, (kind, content, _) in filesystem.items():
+        if kind != "file" or content is None:
+            continue
+        parts = path.split("/")
+        if any(filesystem.get("/".join(parts[:i]), ("dir",))[0] != "dir" for i in range(1, len(parts))):
+            raise InventoryError("metadata_under_nondirectory_ancestor")
+
+
 def component_rows(filesystem):
     rows = []
     for path, (kind, content, layer) in sorted(filesystem.items()):
@@ -424,6 +433,7 @@ def scan_archive(path, report, budget):
                         raise InventoryError("layer_digest_mismatch")
                     entries = {p: (k, c, digest) for p, (k, c, _) in entries.items()}
                     apply_layer(filesystem, entries, removals, opaque_dirs)
+                    validate_selected_ancestors(filesystem)
                     image["layers"].append(digest)
                 image["components"] = component_rows(filesystem)
                 image["coverage_complete"] = True
@@ -491,7 +501,7 @@ def export_inventory(report, consumer):
         records = output["records"] if consumer == "sharp" else output
         maximum = 1000 if consumer == "sharp" else 10000
         byte_maximum = 16 * 1024**2 if consumer == "flowise" else 4 * 1024**2
-        if len(records) > maximum or len(json.dumps(output, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")) + 1 > byte_maximum:
+        if len(records) > maximum or len(json.dumps(output, ensure_ascii=True, sort_keys=True, indent=2, allow_nan=False).encode("utf-8")) + 1 > byte_maximum:
             raise InventoryError("consumer_export_limit_use_canonical_or_split_inputs")
     return output
 
