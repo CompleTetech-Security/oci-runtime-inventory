@@ -1,12 +1,105 @@
 # oci-runtime-inventory
 
-Optional offline image/SBOM metadata inventory for the checker family tracked in
+Standalone Python 3.10+ standard-library inventory for explicit local OCI-layout
+or Docker-save archives and supported SBOM JSON. It never runs Docker, executes
+an image/binary/package, extracts archive paths onto the host, follows archive
+links, opens a network connection or guesses runtime versions from tags/names.
+This optional supporting tool addresses
 [node2shell-check #12](https://github.com/completetech-security/node2shell-check/issues/12).
-The implementation is prepared for review in the initial implementation PR.
-No production image, customer inventory or runtime assessment is included.
+No exploit checker requires it at runtime.
 
-The tool is not a mandatory dependency of any exploit checker. The approved
-implementation will remain standalone Python 3.10+, standard library only,
-without image execution, archive extraction or network access.
+```sh
+python oci_runtime_inventory.py --archive authorized-image.tar --output image-inventory.json
+python oci_runtime_inventory.py --sbom examples/inventory.sbom.json
+python oci_runtime_inventory.py --archive authorized-image.tar --consumer sharp --output sharp-input.json
+python oci_runtime_inventory.py --archive authorized-image.tar --consumer node2shell --output node-input.json
+python oci_runtime_inventory.py --sbom examples/inventory.sbom.json --consumer flowise --output flowise-input.json
+python -m unittest -v
+```
 
-See AGENTS.md, CONTRIBUTING.md, SECURITY.md, LICENSING.md and BRAND_ASSETS.md.
+The checked-in SBOM is synthetic. Real images, inventories and reports must stay
+outside version control. Only read images/evidence you are authorized to inspect.
+`--output` refuses existing files unless `--force` is explicit, and always protects
+inputs, aliases and the executable. No installed dependencies or companion files
+are required when the Python entry point is copied alone.
+
+## Evidence and uncertainty
+
+Canonical JSON schema 1.0 records supported parsing coverage, limits/usage,
+artifact identities, layer digests and logical file provenance. OCI identities
+are verified manifest digests; Docker-save identities are config-byte digests
+(`identity_kind` distinguishes them). This is content identity, not publisher
+trust or a guarantee that an archive can run. Config Env/Cmd/hostnames and image
+tags are not reported. SBOM digests identify the SBOM artifact, not an image.
+
+The virtual filesystem applies layers in order. Whiteouts remove lower-layer
+entries; opaque whiteouts retain same-layer additions regardless of TAR ordering.
+Replaced/deleted manifests cannot survive as current package observations.
+Links and device entries are opaque replacement nodes, never followed or created.
+Metadata under a nondirectory ancestor makes image coverage incomplete.
+
+Exact versions come only from selected package manifests (Sharp, Flowise and
+flowise-components) or Node.js package-database records (dpkg/APK). Installed
+package metadata does not attest deployed runtime use, bundled/global native
+linkage, vendor patches or custom builds. No filename/tag/binary-string inference
+is performed. All local exploitability remains `not_tested`; no vulnerability or
+safety verdict is produced. No observation is proof of absence.
+
+`--consumer node2shell|sharp|flowise` emits actual input contracts for those
+standalone checkers. Unverified provenance/library selection is retained, so
+metadata alone produces unknown assessments. Qualified/oversized/control-bearing
+versions are never normalized into patch claims. Incomplete images are excluded
+from consumer records; absent supported records produce unknown placeholders,
+not empty evidence presented as a clean scan. Canonical output retains the full
+coverage/provenance record; consumer output intentionally carries only each
+checker's accepted fields. Preserve the process exit code as well as the output.
+
+## Supported formats and bounds
+
+- Uncompressed outer USTAR/V7 TAR containing OCI image-layout 1.0 or Docker-save
+  manifest/config/layers. Regular GNU members work when they fit basic header
+  fields. No host filesystem extraction is used. SHA-256 OCI manifest/config/layer
+  descriptors and declared blob sizes are checked; descriptor URLs are never used.
+- OCI plain-TAR or gzip layers; Docker-save plain-TAR layers. Extended PAX/GNU
+  long-name/sparse records, zstd, foreign layers, unsupported digests, outer gzip
+  and other archive formats are unresolved, not silently accepted as complete.
+- JSON CycloneDX 1.4/1.5/1.6, including metadata.component and nested components;
+  SPDX 2.2/2.3 package metadata. This reads selected metadata fields, not full SBOM
+  conformance or deployment/relationship attestation.
+- Default 512 MiB expanded layer bytes; `--max-expanded-mib` accepts 16-4096.
+  Other limits: 8 GiB outer archive, 1 GiB compressed layer reads, 100,000 archive
+  and layer members, 64 path components/512 path characters, 16 images, 256
+  layers/image, 64 index descriptors and three nested indexes, 4 MiB metadata
+  files, 16 MiB aggregate captured metadata, 10,000 selected component records,
+  100 SBOM inputs, bounded JSON depth/node count and at most 1 MiB TAR tail padding.
+
+Unsupported/malformed input, integrity mismatch or any limit marks coverage
+incomplete with a symbolic reason and exits 2 while preserving completed images.
+No components from a failed image are emitted. Exit 0 means supported inspection
+completed, not that a runtime is safe. Interruption exits 130 and preserves
+completed observations before output begins when possible. Once stdout or atomic
+file publication starts, it is never retried; inspect interrupted output before
+running again. Ordinary regular-file/path checks assume stable evidence copies
+and are not a sandbox against concurrent filesystem mutation.
+
+## Validation and provenance
+
+Tests use synthetic archives only. They cover layer replacement/deletion,
+whiteout ordering, links/devices, traversal, duplicate/sparse/extended records,
+truncation/checksums/digests, expansion limits, metadata privacy, standalone
+execution, output aliases and interruption. Real exported consumer payloads were
+also accepted by the actual Node2Shell, Sharp and Flowise CLIs with unknown
+assessments. Local checks and exact-commit hosted CI are separate evidence.
+GitHub Copilot reviews published changes before merge.
+
+Format references reviewed 2026-10-25:
+[OCI layout](https://github.com/opencontainers/image-spec/blob/main/image-layout.md),
+[OCI layers/whiteouts](https://github.com/opencontainers/image-spec/blob/main/layer.md),
+[CycloneDX schema](https://github.com/CycloneDX/specification/blob/master/schema/bom-1.6.schema.json),
+[SPDX package metadata](https://spdx.github.io/spdx-spec/v2.3.1/package-information/).
+No advisory fix table is embedded: this is supporting inventory, not an exploit
+checker. Consumer schemas are pinned by the documented v1 contracts; no feed or
+network dependency is introduced.
+
+[AGENTS](AGENTS.md), [contribution terms](CONTRIBUTING.md), [security policy](SECURITY.md),
+[AGPL license](LICENSE), [dual licensing](LICENSING.md), [brand policy](BRAND_ASSETS.md).
