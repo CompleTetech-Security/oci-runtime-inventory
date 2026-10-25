@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+reports/
+inventories/
+*.tar
+*.tar.gz
+inventory.json
+report.json
+*.partial
