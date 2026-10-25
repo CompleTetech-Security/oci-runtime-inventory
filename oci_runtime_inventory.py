@@ -91,6 +91,8 @@ def header(block):
     if kind not in {b"\0", b"0", b"1", b"2", b"3", b"4", b"5", b"6"}:
         raise InventoryError("unsupported_tar_extension_or_sparse_member")
     size = octal(block[124:136])
+    if kind == b"\0" and name.endswith("/"):
+        kind = b"5"  # Legacy V7 directory encoding.
     if kind not in {b"\0", b"0"} and size:
         raise InventoryError("special_member_has_data")
     path = "" if kind == b"5" and name in {".", "./"} and not prefix else safe_path(prefix + "/" + name if prefix else name)
@@ -146,7 +148,7 @@ def archive_index(stream, length):
 class Budget:
     def __init__(self, expanded=512 * 1024**2):
         self.expanded_limit = expanded
-        self.expanded = self.raw = self.members = self.capture = 0
+        self.expanded = self.raw = self.members = self.capture = self.work = 0
 
     def add(self, key, amount, maximum):
         value = getattr(self, key) + amount
@@ -207,8 +209,12 @@ def layer_entries(stream, budget, layer_digest):
         if block == b"\0" * 512:
             if reader.exact(512) != b"\0" * 512:
                 raise InventoryError("invalid_layer_terminator")
+            padding = 0
             while True:
                 raw = reader.read(65536)
+                padding += len(raw)
+                if padding > 1024**2:
+                    raise InventoryError("excessive_layer_trailing_padding")
                 if not raw:
                     return entries, removals, opaque_dirs
                 if raw.strip(b"\0"):
@@ -244,12 +250,14 @@ def layer_entries(stream, budget, layer_digest):
         reader.discard((-size) % 512)
 
 
-def apply_layer(filesystem, entries, removals, opaque_dirs):
+def apply_layer(filesystem, entries, removals, opaque_dirs, budget=None):
     # Whiteouts affect lower layers regardless of ordering within this layer.
     replacing = {path for path, entry in entries.items() if entry[0] not in {"dir", "whiteout"}}
     if "" in opaque_dirs:
         filesystem.clear()
-    else:
+    elif removals or opaque_dirs or replacing:
+        if budget is not None:
+            budget.add("work",len(filesystem),2000000)
         for path in list(filesystem):
             parts = path.split("/")
             parents = ["/".join(parts[:i]) for i in range(1, len(parts))]
@@ -301,7 +309,9 @@ def image_plans(stream, index, budget):
         visits = 0
         while pending:
             document, depth = pending.pop()
-            descriptors = document.get("manifests") if isinstance(document, dict) else None
+            if not isinstance(document,dict) or type(document.get("schemaVersion")) is not int or document["schemaVersion"] != 2:
+                raise InventoryError("unsupported_index_schema_version")
+            descriptors = document.get("manifests")
             if depth > 3 or not isinstance(descriptors, list) or len(descriptors) > MAX_IMAGES:
                 raise InventoryError("invalid_or_excessive_image_index")
             for descriptor in descriptors:
@@ -354,8 +364,9 @@ def image_plans(stream, index, budget):
     return plans
 
 
-def validate_selected_ancestors(filesystem):
-    for path, (kind, content, _) in filesystem.items():
+def validate_selected_ancestors(filesystem, candidates=None):
+    selected = filesystem if candidates is None else candidates
+    for path, (kind, content, _) in selected.items():
         if kind != "file" or content is None:
             continue
         parts = path.split("/")
@@ -388,7 +399,7 @@ def component_rows(filesystem):
                 if len({key for key, _ in pairs}) != len(pairs):
                     raise InventoryError("duplicate_package_database_field")
                 fields = {key: value.rstrip("\r") for key, value in pairs}
-                if fields.get("Package") == "nodejs" and fields.get("Status") == "install ok installed":
+                if fields.get("Package") == "nodejs" and re.fullmatch(r"(?:install|hold|deinstall|purge|unknown) ok installed",fields.get("Status", "")) is not None:
                     found.append(("nodejs", "deb", fields.get("Version", "")))
         elif path == "lib/apk/db/installed":
             try:
@@ -432,8 +443,8 @@ def scan_archive(path, report, budget):
                     if expected and digest != expected:
                         raise InventoryError("layer_digest_mismatch")
                     entries = {p: (k, c, digest) for p, (k, c, _) in entries.items()}
-                    apply_layer(filesystem, entries, removals, opaque_dirs)
-                    validate_selected_ancestors(filesystem)
+                    apply_layer(filesystem, entries, removals, opaque_dirs, budget)
+                    validate_selected_ancestors(filesystem, entries)
                     image["layers"].append(digest)
                 image["components"] = component_rows(filesystem)
                 image["coverage_complete"] = True
@@ -483,7 +494,10 @@ def scan_sbom(path, report, budget):
             name = entry.get("name", "")
             if not isinstance(name, str):
                 raise InventoryError("invalid_sbom_component_name")
-            if name in TARGETS | {"nodejs"}:
+            group=entry.get("group","") if version_key == "version" else ""
+            if not isinstance(group,str):
+                raise InventoryError("invalid_sbom_component_namespace")
+            if not group and name in TARGETS | {"nodejs"}:
                 version = entry.get(version_key, "")
                 if not isinstance(version, str) or len(version) > 512:
                     raise InventoryError("invalid_sbom_version")
@@ -600,7 +614,7 @@ def main(argv=None):
         except (OSError, EOFError, ValueError, zlib.error):
             report["complete"] = False
             report["notes"].append("input_invalid_or_unavailable")
-        report["usage"] = {name: getattr(budget, name) for name in ["raw", "expanded", "members", "capture"]}
+        report["usage"] = {name: getattr(budget, name) for name in ["raw", "expanded", "members", "capture", "work"]}
         code = 0 if report["complete"] else 2
         publish(export_inventory(report, args.consumer), args.output, args.force, state)
     except KeyboardInterrupt:

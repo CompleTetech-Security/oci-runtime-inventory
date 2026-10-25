@@ -109,3 +109,11 @@ records/four MiB, Node2Shell 10,000 records/four MiB, Flowise 10,000 records/16 
 An oversized merged export fails before publication; use canonical output or split
 the source inputs explicitly. No records are silently truncated. CycloneDX subject
 component provenance uses `metadata/component` without an invented array index.
+
+Layer application skips lower-snapshot traversal for empty layers and limits
+aggregate lower-snapshot path visits to two million. Per-layer selected-file
+ancestor validation examines only new file observations; earlier verified state
+is not rescanned for empty layers. Layer trailing padding shares the outer
+archive one-MiB cap. OCI indexes require schemaVersion 2. Held dpkg Node packages
+retain installed-version metadata. Namespaced CycloneDX packages are not matched
+as unscoped Sharp/Flowise/Node names.

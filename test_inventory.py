@@ -73,6 +73,34 @@ class InventoryTests(unittest.TestCase):
             code, out, err = self.cli("--archive", str(path), *args)
             return code, json.loads(out), err
 
+    def test_review_resource_padding_v7_index_hold_and_namespace(self):
+        # No traversal of a lower filesystem for an empty layer.
+        class NoTraversal(dict):
+            def __iter__(self): raise AssertionError("empty layer must not traverse")
+        c.apply_layer(NoTraversal({"app":("dir",None,"")}),{},set(),set())
+        raw=bytearray(tar_bytes([("app/",b"",tarfile.DIRTYPE),("app/package.json",package())]))
+        raw[156]=0;raw[148:156]=b"        "
+        raw[148:156]=f"{sum(raw[:512]):06o}\0 ".encode()
+        code,report,_=self.scan(docker_archive([bytes(raw)]))
+        self.assertEqual(0,code);self.assertEqual("sharp",report["images"][0]["components"][0]["name"])
+        for compressed in (False,True):
+            code,report,_=self.scan(oci_archive([tar_bytes([])+b"\0"*(1024**2+1)],compressed=compressed))
+            self.assertEqual(2,code)
+        held=b"Package: nodejs\nVersion: 24.22.0\nStatus: hold ok installed\n"
+        code,report,_=self.scan(docker_archive([tar_bytes([("var/lib/dpkg/status",held)])]))
+        self.assertEqual("24.22.0",report["images"][0]["components"][0]["version"])
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"sbom.json"
+            path.write_text(json.dumps(dict(bomFormat="CycloneDX",specVersion="1.6",components=[dict(group="@vendor",name="sharp",version="0.35.5",components=[dict(name="flowise",version="3.1.3")])])),encoding="utf-8")
+            report=dict(sboms=[]);c.scan_sbom(path,report,c.Budget())
+            self.assertEqual(["flowise"],[r["name"] for r in report["sboms"][0]["components"]])
+        # Replace the outer index version while retaining valid manifest descriptors.
+        archive=oci_archive([tar_bytes([])])
+        with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
+            members=[(m.name,stream.extractfile(m).read()) for m in stream if m.isfile()]
+        members=[(name,data.replace(b'"schemaVersion": 2',b'"schemaVersion": 3') if name=="index.json" else data) for name,data in members]
+        self.assertEqual(2,self.scan(tar_bytes(members))[0])
+
     def test_each_layer_rejects_inaccessible_metadata_and_serialized_unicode_limit(self):
         code, report, _ = self.scan(docker_archive([
             tar_bytes([("app", b"", tarfile.SYMTYPE), ("app/package.json", package())]),
@@ -184,7 +212,7 @@ class InventoryTests(unittest.TestCase):
             self.assertFalse(report["complete"])
 
     def test_limits_bound_gzip_expansion_and_selected_file_capture(self):
-        compressed = oci_archive([b"\0" * (17 * 1024**2)], compressed=True)
+        compressed = oci_archive([tar_bytes([("unselected.bin",b"\0"*(17*1024**2))])], compressed=True)
         code, report, _ = self.scan(compressed, "--max-expanded-mib", "16")
         self.assertEqual(2, code)
         self.assertIn("expanded_limit", report["images"][0]["notes"])
