@@ -324,7 +324,16 @@ def image_plans(stream, index, budget):
                     raise InventoryError("image_descriptor_limit")
                 try:
                     manifest = blob_json(stream, index, descriptor, budget)
-                    if isinstance(manifest, dict) and "manifests" in manifest:
+                    media = descriptor.get("mediaType")
+                    index_media = {"application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"}
+                    image_media = {"application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"}
+                    if not isinstance(media, str) or media not in index_media | image_media:
+                        raise InventoryError("unsupported_manifest_media_type")
+                    if not isinstance(manifest, dict) or ("mediaType" in manifest and manifest["mediaType"] != media):
+                        raise InventoryError("unsupported_manifest_media_type")
+                    if "artifactType" in manifest:
+                        raise InventoryError("unsupported_oci_artifact")
+                    if media in index_media:
                         pending.append((manifest, depth + 1))
                         continue
                     if not isinstance(manifest, dict) or type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] != 2 or not isinstance(manifest.get("layers"), list):
@@ -336,6 +345,9 @@ def image_plans(stream, index, budget):
                     config_name = descriptor_path(config, index)
                     if hashlib.sha256(read_member(stream, index, config_name, budget)).hexdigest() != config["digest"][7:]:
                         raise InventoryError("config_digest_mismatch")
+                    config_media = config.get("mediaType")
+                    if not isinstance(config_media, str) or config_media not in {"application/vnd.oci.image.config.v1+json", "application/vnd.docker.container.image.v1+json"}:
+                        raise InventoryError("unsupported_image_config_media_type")
                     layers = []
                     for layer in manifest["layers"]:
                         name = descriptor_path(layer, index)
