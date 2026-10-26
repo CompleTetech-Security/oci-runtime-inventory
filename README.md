@@ -1,3 +1,14 @@
+<p align="center">
+  <img src="docs/images/banner.png" alt="oci-runtime-inventory by CompleteTech LLC" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/CompleTetech-Security/oci-runtime-inventory/actions"><img src="https://img.shields.io/github/actions/workflow/status/CompleTetech-Security/oci-runtime-inventory/tests.yml?label=tests" alt="Tests"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-1E3A8A" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/dependencies-none-067647" alt="No runtime dependencies">
+  <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-AGPL--3.0%20%7C%20commercial-64748B" alt="AGPL-3.0 or commercial license"></a>
+</p>
+
 # oci-runtime-inventory
 
 Standalone Python 3.10+ standard-library inventory for explicit local OCI-layout
@@ -23,6 +34,15 @@ outside version control. Only read images/evidence you are authorized to inspect
 `--output` refuses existing files unless `--force` is explicit, and always protects
 inputs, aliases and the executable. No installed dependencies or companion files
 are required when the Python entry point is copied alone.
+
+## Offline workflow
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.png">
+  <img src="docs/images/overview-light.png" alt="OCI Runtime Inventory offline workflow" width="100%">
+</picture>
+
+Supplied local evidence only. The tool does not contact targets or execute the software being assessed.
 
 ## Evidence and uncertainty
 
