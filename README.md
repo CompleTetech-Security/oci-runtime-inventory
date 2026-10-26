@@ -68,6 +68,15 @@ checker's accepted fields. Preserve the process exit code as well as the output.
 - OCI plain-TAR or gzip layers; Docker-save plain-TAR layers. Extended PAX/GNU
   long-name/sparse records, zstd, foreign layers, unsupported digests, outer gzip
   and other archive formats are unresolved, not silently accepted as complete.
+- OCI-layout descriptors must explicitly identify an OCI image manifest/index
+  or Docker schema-2 manifest/list. An optional manifest `mediaType` must match
+  its descriptor. Only OCI image-config or Docker image-config media types
+  authorize filesystem interpretation; the config bytes remain opaque and
+  digest-verified. Manifests declaring `artifactType`, empty artifact configs,
+  missing config media types and unknown descriptor/config types are incomplete
+  artifact records with no package observations or consumer records. Verified
+  manifest digests remain in canonical output, and supported image siblings
+  retain their observations.
 - JSON CycloneDX 1.4/1.5/1.6, including metadata.component and nested components;
   SPDX 2.2/2.3 package metadata. This reads selected metadata fields, not full SBOM
   conformance or deployment/relationship attestation.
