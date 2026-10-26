@@ -145,10 +145,13 @@ def archive_index(stream, length):
     raise InventoryError("missing_tar_terminator")
 
 
+MAX_READ_CALLS = 200000
+
+
 class Budget:
     def __init__(self, expanded=512 * 1024**2):
         self.expanded_limit = expanded
-        self.expanded = self.raw = self.members = self.capture = self.work = 0
+        self.expanded = self.raw = self.members = self.capture = self.work = self.read_calls = 0
 
     def add(self, key, amount, maximum):
         value = getattr(self, key) + amount
@@ -163,6 +166,7 @@ class Segment:
         self.budget, self.digest = budget, hashlib.sha256()
 
     def read(self, size=-1):
+        self.budget.add("read_calls", 1, MAX_READ_CALLS)
         size = min(self.remaining, 65536 if size < 0 else size)
         self.stream.seek(self.position)
         raw = self.stream.read(size)
@@ -318,27 +322,33 @@ def image_plans(stream, index, budget):
                 visits += 1
                 if visits > 64:
                     raise InventoryError("image_descriptor_limit")
-                manifest = blob_json(stream, index, descriptor, budget)
-                if isinstance(manifest, dict) and "manifests" in manifest:
-                    pending.append((manifest, depth + 1))
-                    continue
-                if not isinstance(manifest, dict) or type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] != 2 or not isinstance(manifest.get("layers"), list):
-                    raise InventoryError("invalid_image_manifest")
-                if len(manifest["layers"]) > MAX_LAYERS:
-                    raise InventoryError("image_layer_limit")
-                # Config is verified as opaque bytes, not parsed for Env/Cmd/host data.
-                config = manifest.get("config")
-                config_name = descriptor_path(config, index)
-                if hashlib.sha256(read_member(stream, index, config_name, budget)).hexdigest() != config["digest"][7:]:
-                    raise InventoryError("config_digest_mismatch")
-                layers = []
-                for layer in manifest["layers"]:
-                    name = descriptor_path(layer, index)
-                    media = layer.get("mediaType", "")
-                    if not isinstance(media, str) or media not in {"application/vnd.oci.image.layer.v1.tar", "application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip"}:
-                        raise InventoryError("unsupported_layer_media_type")
-                    layers.append((name, media.endswith("gzip"), layer["digest"]))
-                plans.append((descriptor["digest"], layers, "oci_manifest"))
+                try:
+                    manifest = blob_json(stream, index, descriptor, budget)
+                    if isinstance(manifest, dict) and "manifests" in manifest:
+                        pending.append((manifest, depth + 1))
+                        continue
+                    if not isinstance(manifest, dict) or type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] != 2 or not isinstance(manifest.get("layers"), list):
+                        raise InventoryError("invalid_image_manifest")
+                    if len(manifest["layers"]) > MAX_LAYERS:
+                        raise InventoryError("image_layer_limit")
+                    # Config is verified as opaque bytes, not parsed for Env/Cmd/host data.
+                    config = manifest.get("config")
+                    config_name = descriptor_path(config, index)
+                    if hashlib.sha256(read_member(stream, index, config_name, budget)).hexdigest() != config["digest"][7:]:
+                        raise InventoryError("config_digest_mismatch")
+                    layers = []
+                    for layer in manifest["layers"]:
+                        name = descriptor_path(layer, index)
+                        media = layer.get("mediaType", "")
+                        if not isinstance(media, str) or media not in {"application/vnd.oci.image.layer.v1.tar", "application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip"}:
+                            raise InventoryError("unsupported_layer_media_type")
+                        layers.append((name, media.endswith("gzip"), layer["digest"]))
+                    plans.append((descriptor["digest"], layers, "oci_manifest", None))
+                except InventoryError as exc:
+                    identity=descriptor.get("digest", "unknown") if isinstance(descriptor,dict) else "unknown"
+                    if not isinstance(identity,str) or re.fullmatch(r"sha256:[a-f0-9]{64}",identity) is None:
+                        identity="unknown"
+                    plans.append((identity, [], "oci_manifest", str(exc)))
                 if len(plans) > MAX_IMAGES:
                     raise InventoryError("image_count_limit")
     elif "manifest.json" in index:
@@ -356,7 +366,7 @@ def image_plans(stream, index, budget):
                 if name not in index or index[name][2] != "file":
                     raise InventoryError("missing_docker_layer")
                 layers.append((name, False, None))
-            plans.append((digest, layers, "docker_config"))
+            plans.append((digest, layers, "docker_config", None))
     else:
         raise InventoryError("unsupported_archive_layout")
     if not plans:
@@ -428,9 +438,11 @@ def scan_archive(path, report, budget):
     with stream:
         index = archive_index(stream, length)
         plans = image_plans(stream, index, budget)
-        for image_digest, layers, identity_kind in plans:
+        for image_digest, layers, identity_kind, planning_error in plans:
             image = dict(digest=image_digest, identity_kind=identity_kind, layers=[], components=[], coverage_complete=False, notes=[])
             try:
+                if planning_error:
+                    raise InventoryError(planning_error)
                 filesystem = {}
                 for name, compressed, expected in layers:
                     offset, size, _ = index[name]

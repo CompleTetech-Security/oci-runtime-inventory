@@ -73,6 +73,45 @@ class InventoryTests(unittest.TestCase):
             code, out, err = self.cli("--archive", str(path), *args)
             return code, json.loads(out), err
 
+    def test_gzip_header_work_is_globally_bounded(self):
+        layer=tar_bytes([('app/package.json',package())])
+        archive=oci_archive([layer],compressed=True)
+        with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
+            members=[(m.name,stream.extractfile(m).read()) for m in stream if m.isfile()]
+        # Rewrite gzip FNAME and the affected blob/manifest/index descriptors.
+        compressed=gzip.compress(layer,mtime=0)
+        malicious=compressed[:3]+bytes([8])+compressed[4:10]+b'x'*1000+b'\0'+compressed[10:]
+        blobs=dict(members);index=json.loads(blobs['index.json']);old=index['manifests'][0]
+        manifest=json.loads(blobs['blobs/sha256/'+old['digest'][7:]])
+        digest=hashlib.sha256(malicious).hexdigest();blobs['blobs/sha256/'+digest]=malicious
+        manifest['layers'][0].update(digest='sha256:'+digest,size=len(malicious))
+        raw=json.dumps(manifest).encode();digest=hashlib.sha256(raw).hexdigest();blobs['blobs/sha256/'+digest]=raw
+        old.update(digest='sha256:'+digest,size=len(raw));blobs['index.json']=json.dumps(index).encode()
+        with mock.patch.object(c,'MAX_READ_CALLS',100):
+            code,report,_=self.scan(tar_bytes(list(blobs.items())))
+        self.assertEqual(2,code);self.assertIn('read_calls_limit',report['images'][0]['notes'])
+        self.assertEqual([],report['images'][0]['components'])
+
+    def test_unsupported_image_plan_preserves_valid_sibling(self):
+        archive=oci_archive([tar_bytes([('app/package.json',package())])])
+        with tarfile.open(fileobj=io.BytesIO(archive)) as stream:
+            blobs={m.name:stream.extractfile(m).read() for m in stream if m.isfile()}
+        index=json.loads(blobs['index.json']);descriptor=index['manifests'][0]
+        bad=json.loads(blobs['blobs/sha256/'+descriptor['digest'][7:]])
+        bad['layers'][0]['mediaType']='application/vnd.oci.image.layer.v1.tar+zstd'
+        raw=json.dumps(bad).encode();digest=hashlib.sha256(raw).hexdigest();blobs['blobs/sha256/'+digest]=raw
+        index['manifests'].append(dict(digest='sha256:'+digest,size=len(raw),mediaType='application/vnd.oci.image.manifest.v1+json'))
+        blobs['index.json']=json.dumps(index).encode()
+        for reverse in (False,True):
+            if reverse:
+                index['manifests'].reverse();blobs['index.json']=json.dumps(index).encode()
+            code,report,_=self.scan(tar_bytes(list(blobs.items())))
+            self.assertEqual(2,code);self.assertEqual(2,len(report['images']))
+            valid=next(image for image in report['images'] if image['coverage_complete'])
+            failed=next(image for image in report['images'] if not image['coverage_complete'])
+            self.assertEqual('sharp',valid['components'][0]['name'])
+            self.assertEqual([],failed['components']);self.assertIn('unsupported_layer_media_type',failed['notes'])
+
     def test_failed_publication_removes_sensitive_staging_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);output=root/"report.json"

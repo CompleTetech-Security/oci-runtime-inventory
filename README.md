@@ -117,3 +117,5 @@ is not rescanned for empty layers. Layer trailing padding shares the outer
 archive one-MiB cap. OCI indexes require schemaVersion 2. Held dpkg Node packages
 retain installed-version metadata. Namespaced CycloneDX packages are not matched
 as unscoped Sharp/Flowise/Node names.
+
+Layer reads share a 200,000-call budget, bounding per-byte gzip header processing as well as byte/expansion limits. OCI image planning errors produce an incomplete image record while independently supported sibling images retain their observations. Limits remain shared across images.
