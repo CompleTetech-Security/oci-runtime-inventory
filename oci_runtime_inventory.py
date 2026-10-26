@@ -304,6 +304,14 @@ def blob_json(stream, index, descriptor, budget):
 
 
 def image_plans(stream, index, budget):
+    def index_descriptors(document, depth):
+        if not isinstance(document, dict) or type(document.get("schemaVersion")) is not int or document["schemaVersion"] != 2:
+            raise InventoryError("unsupported_index_schema_version")
+        descriptors = document.get("manifests")
+        if depth > 3 or not isinstance(descriptors, list) or len(descriptors) > MAX_IMAGES:
+            raise InventoryError("invalid_or_excessive_image_index")
+        return descriptors
+
     plans = []
     if "oci-layout" in index:
         if json_value(read_member(stream, index, "oci-layout", budget)) != {"imageLayoutVersion": "1.0.0"}:
@@ -313,11 +321,7 @@ def image_plans(stream, index, budget):
         visits = 0
         while pending:
             document, depth = pending.pop()
-            if not isinstance(document,dict) or type(document.get("schemaVersion")) is not int or document["schemaVersion"] != 2:
-                raise InventoryError("unsupported_index_schema_version")
-            descriptors = document.get("manifests")
-            if depth > 3 or not isinstance(descriptors, list) or len(descriptors) > MAX_IMAGES:
-                raise InventoryError("invalid_or_excessive_image_index")
+            descriptors = index_descriptors(document, depth)
             for descriptor in descriptors:
                 visits += 1
                 if visits > 64:
@@ -334,6 +338,9 @@ def image_plans(stream, index, budget):
                     if "artifactType" in manifest:
                         raise InventoryError("unsupported_oci_artifact")
                     if media in index_media:
+                        # Reject malformed children inside this descriptor's
+                        # failure boundary, before deferring their traversal.
+                        index_descriptors(manifest, depth + 1)
                         pending.append((manifest, depth + 1))
                         continue
                     if not isinstance(manifest, dict) or type(manifest.get("schemaVersion")) is not int or manifest["schemaVersion"] != 2 or not isinstance(manifest.get("layers"), list):
@@ -368,17 +375,21 @@ def image_plans(stream, index, budget):
         if not isinstance(manifests, list) or not manifests or len(manifests) > MAX_IMAGES:
             raise InventoryError("invalid_docker_manifest_list")
         for manifest in manifests:
-            if not isinstance(manifest, dict) or not isinstance(manifest.get("Layers"), list) or len(manifest["Layers"]) > MAX_LAYERS:
-                raise InventoryError("invalid_docker_image_manifest")
-            config = safe_path(manifest.get("Config"))
-            digest = "sha256:" + hashlib.sha256(read_member(stream, index, config, budget)).hexdigest()
-            layers = []
-            for layer in manifest["Layers"]:
-                name = safe_path(layer)
-                if name not in index or index[name][2] != "file":
-                    raise InventoryError("missing_docker_layer")
-                layers.append((name, False, None))
-            plans.append((digest, layers, "docker_config", None))
+            digest = "unknown"
+            try:
+                if not isinstance(manifest, dict) or not isinstance(manifest.get("Layers"), list) or len(manifest["Layers"]) > MAX_LAYERS:
+                    raise InventoryError("invalid_docker_image_manifest")
+                config = safe_path(manifest.get("Config"))
+                digest = "sha256:" + hashlib.sha256(read_member(stream, index, config, budget)).hexdigest()
+                layers = []
+                for layer in manifest["Layers"]:
+                    name = safe_path(layer)
+                    if name not in index or index[name][2] != "file":
+                        raise InventoryError("missing_docker_layer")
+                    layers.append((name, False, None))
+                plans.append((digest, layers, "docker_config", None))
+            except InventoryError as exc:
+                plans.append((digest, [], "docker_config", str(exc)))
     else:
         raise InventoryError("unsupported_archive_layout")
     if not plans:

@@ -135,4 +135,14 @@ as unscoped Sharp/Flowise/Node names.
 
 Layer reads share a 200,000-call budget, bounding per-byte gzip header processing as well as byte/expansion limits. OCI image planning errors produce an incomplete image record while independently supported sibling images retain their observations. Limits remain shared across images.
 
+Malformed child OCI indexes and independent Docker-save entries are localized
+to incomplete records while supported siblings retain package observations and
+digest provenance, regardless of sibling order. A rejected child index retains
+its verified descriptor identity; a Docker entry retains its config digest only
+after the config bytes have been read, otherwise its identity is `unknown`.
+Rejected entries provide no consumer records. Overall status remains incomplete
+and exits 2. Corruption of the root layout/index or exhaustion of global planning
+limits may still prevent archive inspection; shared budgets are never reset for
+a sibling.
+
 Every candidate package.json is captured and strictly parsed before its package name is known. Irrelevant manifests still consume the shared capture budget; malformed or excessive candidates make that image incomplete. These deliberately conservative bounds can reject large valid images/SBOMs. OCI attestation manifests and unsupported layer media types are recorded as incomplete; platform labels are not collected. No-force publication requires hard-link support and fails closed otherwise.
