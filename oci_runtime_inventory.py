@@ -672,7 +672,8 @@ def main(argv=None, *, clock=None):
     report["limits"] = dict(archive_bytes=MAX_ARCHIVE, expanded_bytes=args.max_expanded_mib * 1024**2, compressed_bytes=1024**3,
                             members=MAX_MEMBERS, capture_bytes=MAX_CAPTURE, images=MAX_IMAGES, layers_per_image=MAX_LAYERS)
     budget = Budget(args.max_expanded_mib * 1024**2)
-    state = {"validated": False, "published": False, "stdout_started": False, "publication_started": False}
+    state = {"validated": False, "published": False, "stdout_started": False,
+             "publication_started": False, "pair_started": False}
     code = 0
     def publish_report():
         report["usage"] = {name: getattr(budget, name) for name in ["raw", "expanded", "members", "capture", "work"]}
@@ -682,7 +683,7 @@ def main(argv=None, *, clock=None):
             receipt = dict(schema_version="1.0", consumer=args.consumer,
                            export_sha256=hashlib.sha256(serialized(exported).encode("utf-8")).hexdigest(), inventory=report)
             # Either artifact may survive interruption; never retry a partially published pair.
-            state["publication_started"] = True
+            state["pair_started"] = True
             publish(receipt, args.receipt, args.force, {"published": False, "publication_started": False})
         publish(exported, args.output, args.force, state)
     try:
@@ -708,7 +709,7 @@ def main(argv=None, *, clock=None):
         code = 0 if report["complete"] else 2
         publish_report()
     except KeyboardInterrupt:
-        if state["validated"] and not any(state.get(key) for key in ["published", "stdout_started", "publication_started"]):
+        if state["validated"] and not any(state.get(key) for key in ["published", "stdout_started", "publication_started", "pair_started"]):
             report["complete"] = False
             report["notes"].append("interrupted_completed_images_only")
             try:

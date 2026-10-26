@@ -170,6 +170,30 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(hashlib.sha256(result.stdout).hexdigest(), json.loads(receipt.read_text(encoding="utf-8"))["export_sha256"])
 
+    def test_consumer_staging_interrupt_cleans_owned_temporary_but_retains_receipt(self):
+        source = Path(__file__).parent / "examples/inventory.sbom.json"
+        for force in (False, True):
+            with self.subTest(force=force), tempfile.TemporaryDirectory() as directory:
+                receipt = Path(directory) / "receipt.json"
+                output = Path(directory) / "consumer.json"
+                args = ["--sbom", str(source), "--consumer", "sharp", "--receipt", str(receipt), "--output", str(output)]
+                if force:
+                    output.write_bytes(b"previous consumer evidence")
+                    args.append("--force")
+                with mock.patch.object(c.os, "fsync", side_effect=[None, KeyboardInterrupt]) as sync:
+                    code, text, _ = self.run_cli(args, datetime(2026, 1, 2, tzinfo=timezone.utc))
+                self.assertEqual((130, ""), (code, text))
+                self.assertEqual(2, sync.call_count)  # No second attempt to publish the pair.
+                self.assertTrue(receipt.is_file())  # The committed receipt remains useful evidence.
+                envelope = json.loads(receipt.read_text(encoding="utf-8"))
+                expected = c.serialized(c.export_inventory(envelope["inventory"], "sharp")).encode("utf-8")
+                self.assertEqual(hashlib.sha256(expected).hexdigest(), envelope["export_sha256"])
+                self.assertEqual([], list(Path(directory).glob(".oci-report-*")))
+                if force:
+                    self.assertEqual(b"previous consumer evidence", output.read_bytes())
+                else:
+                    self.assertFalse(output.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
