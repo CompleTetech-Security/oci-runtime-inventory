@@ -387,6 +387,8 @@ def validate_selected_ancestors(filesystem, candidates=None):
 def component_rows(filesystem):
     rows = []
     for path, (kind, content, layer) in sorted(filesystem.items()):
+        if selected_file(path) and kind != "file":
+            raise InventoryError("selected_metadata_not_regular_file")
         if kind != "file" or content is None:
             continue
         parts = path.split("/")

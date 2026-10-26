@@ -28,15 +28,20 @@ are required when the Python entry point is copied alone.
 Canonical JSON schema 1.0 records supported parsing coverage, limits/usage,
 artifact identities, layer digests and logical file provenance. OCI identities
 are verified manifest digests; Docker-save identities are config-byte digests
-(`identity_kind` distinguishes them). This is content identity, not publisher
-trust or a guarantee that an archive can run. Config Env/Cmd/hostnames and image
+(`identity_kind` distinguishes them). An OCI manifest digest binds its declared layer descriptors. A Docker-save
+config digest identifies only config bytes and does not bind the archive layers:
+`rootfs.diff_ids` are not validated, and identical configs with different supplied
+layers retain the same config digest. Use the separately recorded ordered layer
+digests when comparing observations. Neither identity establishes publisher trust
+or that an archive can run. Config Env/Cmd/hostnames and image
 tags are not reported. SBOM digests identify the SBOM artifact, not an image.
 
 The virtual filesystem applies layers in order. Whiteouts remove lower-layer
 entries; opaque whiteouts retain same-layer additions regardless of TAR ordering.
 Replaced/deleted manifests cannot survive as current package observations.
 Links and device entries are opaque replacement nodes, never followed or created.
-Metadata under a nondirectory ancestor makes image coverage incomplete.
+Metadata under a nondirectory ancestor, or a selected metadata path that is a
+link/device/directory, makes image coverage incomplete.
 
 Exact versions come only from selected package manifests (Sharp, Flowise and
 flowise-components) or Node.js package-database records (dpkg/APK). Installed
@@ -70,7 +75,8 @@ checker's accepted fields. Preserve the process exit code as well as the output.
   Other limits: 8 GiB outer archive, 1 GiB compressed layer reads, 100,000 archive
   and layer members, 64 path components/512 path characters, 16 images, 256
   layers/image, 64 index descriptors and three nested indexes, 4 MiB metadata
-  files, 16 MiB aggregate captured metadata, 10,000 selected component records,
+  files, 16 MiB aggregate captured metadata, 10,000 visited SBOM component entries (including irrelevant entries) and
+  10,000 selected component records per image,
   100 SBOM inputs, bounded JSON depth/node count and at most 1 MiB TAR tail padding.
 
 Unsupported/malformed input, integrity mismatch or any limit marks coverage
@@ -119,3 +125,5 @@ retain installed-version metadata. Namespaced CycloneDX packages are not matched
 as unscoped Sharp/Flowise/Node names.
 
 Layer reads share a 200,000-call budget, bounding per-byte gzip header processing as well as byte/expansion limits. OCI image planning errors produce an incomplete image record while independently supported sibling images retain their observations. Limits remain shared across images.
+
+Every candidate package.json is captured and strictly parsed before its package name is known. Irrelevant manifests still consume the shared capture budget; malformed or excessive candidates make that image incomplete. These deliberately conservative bounds can reject large valid images/SBOMs. OCI attestation manifests and unsupported layer media types are recorded as incomplete; platform labels are not collected. No-force publication requires hard-link support and fails closed otherwise.

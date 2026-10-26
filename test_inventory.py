@@ -227,8 +227,10 @@ class InventoryTests(unittest.TestCase):
         for kind in [tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE, tarfile.FIFOTYPE]:
             upper = tar_bytes([(path, b"", kind, "/private/host/package.json")])
             code, report, _ = self.scan(docker_archive([lower, upper]))
-            self.assertEqual(0, code)
+            self.assertEqual(2, code)
             self.assertEqual([], report["images"][0]["components"])
+            self.assertFalse(report["images"][0]["coverage_complete"])
+            self.assertIn("selected_metadata_not_regular_file",report["images"][0]["notes"])
 
     def test_metadata_below_link_is_incomplete_not_followed(self):
         layer = tar_bytes([("app", b"", tarfile.SYMTYPE, "/host"), ("app/package.json", package())])
