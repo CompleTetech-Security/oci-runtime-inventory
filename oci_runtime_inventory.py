@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import gzip
 import zlib
 import hashlib
@@ -557,6 +558,28 @@ def export_inventory(report, consumer):
     return output
 
 
+def serialized(data):
+    return json.dumps(data, ensure_ascii=True, sort_keys=True, indent=2, allow_nan=False) + "\n"
+
+
+def content_identity(report):
+    """Hash canonical evidence, excluding generation time and this digest."""
+    content = {key: value for key, value in report.items() if key not in {"generated_at", "content_sha256"}}
+    return hashlib.sha256(serialized(content).encode("utf-8")).hexdigest()
+
+
+def generation_context(clock=None):
+    value = (clock or (lambda: datetime.now(timezone.utc)))()
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise InventoryError("generation_clock_requires_aware_datetime")
+    with regular_input(Path(__file__).resolve())[0] as stream:
+        # Source identity is bounded independently of potentially large input archives.
+        source = stream.read(MAX_JSON + 1)
+        if len(source) > MAX_JSON:
+            raise InventoryError("executable_identity_size_limit")
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"), hashlib.sha256(source).hexdigest()
+
+
 def _export_inventory(report, consumer):
     rows = [row for image in [*report["images"], *report.get("sboms", [])] if image["coverage_complete"] for row in image["components"]]
     def version(row, maximum=512):
@@ -589,7 +612,7 @@ def validate_output(output, inputs, force):
 
 
 def publish(data, output, force, state):
-    text = json.dumps(data, ensure_ascii=True, sort_keys=True, indent=2, allow_nan=False) + "\n"
+    text = serialized(data)
     if output is None:
         state["stdout_started"] = True
         sys.stdout.write(text)
@@ -617,13 +640,14 @@ def publish(data, output, force, state):
             staged.unlink(missing_ok=True)
 
 
-def main(argv=None):
+def main(argv=None, *, clock=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--archive", type=Path, help="Existing uncompressed OCI-layout or Docker-save TAR archive")
     parser.add_argument("--sbom", action="append", default=[], type=Path, help="Existing CycloneDX 1.4-1.6 or SPDX 2.2/2.3 JSON; repeatable")
     parser.add_argument("--consumer", choices=("canonical", "node2shell", "sharp", "flowise"), default="canonical", help="Optional offline consumer inventory; provenance remains unverified")
     parser.add_argument("--max-expanded-mib", type=int, default=512, help="Global expanded-byte budget, 16-4096 MiB (default 512)")
     parser.add_argument("--output", type=Path, help="New JSON report path; default stdout")
+    parser.add_argument("--receipt", type=Path, help="Optional canonical receipt for a consumer export, linked by its exact SHA-256")
     parser.add_argument("--force", action="store_true", help="Replace an existing report, never a protected input")
     parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args(argv)
@@ -633,6 +657,8 @@ def main(argv=None):
         parser.error("at most 100 SBOM files")
     if not 16 <= args.max_expanded_mib <= 4096:
         parser.error("--max-expanded-mib must be 16 through 4096")
+    if args.receipt and args.consumer == "canonical":
+        parser.error("--receipt accompanies --consumer node2shell, sharp or flowise")
     report = dict(schema_version=SCHEMA_VERSION, tool={"name": "oci-runtime-inventory", "version": VERSION}, complete=True,
                   images=[], sboms=[], notes=["Offline package metadata only; no runtime, package provenance, patch state, absence or exploitability is established."],
                   exploitability="not_tested")
@@ -641,8 +667,25 @@ def main(argv=None):
     budget = Budget(args.max_expanded_mib * 1024**2)
     state = {"validated": False, "published": False, "stdout_started": False, "publication_started": False}
     code = 0
+    def publish_report():
+        report["usage"] = {name: getattr(budget, name) for name in ["raw", "expanded", "members", "capture", "work"]}
+        report["content_sha256"] = content_identity(report)
+        exported = export_inventory(report, args.consumer)
+        if args.receipt:
+            receipt = dict(schema_version="1.0", consumer=args.consumer,
+                           export_sha256=hashlib.sha256(serialized(exported).encode("utf-8")).hexdigest(), inventory=report)
+            # Either artifact may survive interruption; never retry a partially published pair.
+            state["publication_started"] = True
+            publish(receipt, args.receipt, args.force, {})
+        publish(exported, args.output, args.force, state)
     try:
         validate_output(args.output, ([args.archive] if args.archive else []) + args.sbom, args.force)
+        validate_output(args.receipt, ([args.archive] if args.archive else []) + args.sbom, args.force)
+        if args.output and args.receipt:
+            validate_output(args.receipt, [args.output], args.force)
+        generated_at, executable_sha256 = generation_context(clock)
+        report["generated_at"] = generated_at
+        report["tool"]["executable_sha256"] = executable_sha256
         state["validated"] = True
         try:
             if args.archive:
@@ -655,15 +698,14 @@ def main(argv=None):
         except (OSError, EOFError, ValueError, zlib.error):
             report["complete"] = False
             report["notes"].append("input_invalid_or_unavailable")
-        report["usage"] = {name: getattr(budget, name) for name in ["raw", "expanded", "members", "capture", "work"]}
         code = 0 if report["complete"] else 2
-        publish(export_inventory(report, args.consumer), args.output, args.force, state)
+        publish_report()
     except KeyboardInterrupt:
         if state["validated"] and not any(state.get(key) for key in ["published", "stdout_started", "publication_started"]):
             report["complete"] = False
             report["notes"].append("interrupted_completed_images_only")
             try:
-                publish(export_inventory(report, args.consumer), args.output, args.force, state)
+                publish_report()
             except (OSError, ValueError, KeyboardInterrupt):
                 pass
         sys.stderr.write("Interrupted; output may be incomplete or publication indeterminate; no publication retry.\n")
