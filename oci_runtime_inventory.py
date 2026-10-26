@@ -559,6 +559,7 @@ def publish(data, output, force, state):
         state["published"] = True
         return
     staged = None
+    interrupted = False
     try:
         with tempfile.NamedTemporaryFile("wb", dir=output.parent, prefix=".oci-report-", delete=False) as stream:
             staged = Path(stream.name)
@@ -571,8 +572,11 @@ def publish(data, output, force, state):
         else:
             os.link(staged, output)
         state["published"] = True
+    except KeyboardInterrupt:
+        interrupted = True
+        raise
     finally:
-        if staged is not None and (state["published"] or not state.get("publication_started")):
+        if staged is not None and (not interrupted or state["published"] or not state.get("publication_started")):
             staged.unlink(missing_ok=True)
 
 

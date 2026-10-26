@@ -73,6 +73,17 @@ class InventoryTests(unittest.TestCase):
             code, out, err = self.cli("--archive", str(path), *args)
             return code, json.loads(out), err
 
+    def test_failed_publication_removes_sensitive_staging_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);output=root/"report.json"
+            for force in (False,True):
+                if force:output.write_text("existing",encoding="utf-8")
+                state={"published":False,"publication_started":False}
+                with mock.patch.object(c.os,"replace" if force else "link",side_effect=OSError("simulated failure")):
+                    with self.assertRaises(OSError):c.publish({"private":"synthetic"},output,force,state)
+                self.assertEqual([],list(root.glob(".oci-report-*")))
+                if force:self.assertEqual("existing",output.read_text())
+
     def test_review_resource_padding_v7_index_hold_and_namespace(self):
         # No traversal of a lower filesystem for an empty layer.
         class NoTraversal(dict):
