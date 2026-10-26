@@ -14,6 +14,7 @@ python oci_runtime_inventory.py --sbom examples/inventory.sbom.json
 python oci_runtime_inventory.py --archive authorized-image.tar --consumer sharp --output sharp-input.json
 python oci_runtime_inventory.py --archive authorized-image.tar --consumer node2shell --output node-input.json
 python oci_runtime_inventory.py --sbom examples/inventory.sbom.json --consumer flowise --output flowise-input.json
+python oci_runtime_inventory.py --sbom examples/inventory.sbom.json --consumer sharp --output sharp-input.json --receipt sharp-receipt.json
 python -m unittest -v
 ```
 
@@ -35,6 +36,24 @@ layers retain the same config digest. Use the separately recorded ordered layer
 digests when comparing observations. Neither identity establishes publisher trust
 or that an archive can run. Config Env/Cmd/hostnames and image
 tags are not reported. SBOM digests identify the SBOM artifact, not an image.
+
+Canonical reports also retain `generated_at` (UTC inventory-generation time),
+`tool.version` and `tool.executable_sha256` (SHA-256 of the standalone file's
+bytes, including when invoked through a symlink). The code has no separate
+advisory/rule table: the executable digest identifies its parser and export
+rules. Generation time is captured once per invocation and reused if an
+interruption produces a partial report. It is not an artifact build time,
+evidence-acquisition time, publisher attestation or deployed-state observation.
+No such times are inferred from file/archive modification timestamps.
+
+`content_sha256` hashes the canonical JSON projection with `generated_at` and
+`content_sha256` omitted, using sorted keys, ASCII escaping, two-space indentation
+and a final newline in UTF-8. This permits stable content comparisons across
+different generation times while retaining all tool, coverage and artifact
+evidence. Existing artifact/config/layer/SBOM digests remain unchanged. For
+deterministic Python fixtures, `main(argv, clock=...)` accepts a callable returning
+an aware `datetime`; it is converted to UTC without altering content identities
+or confidence. The public CLI uses the current UTC clock.
 
 The virtual filesystem applies layers in order. Whiteouts remove lower-layer
 entries; opaque whiteouts retain same-layer additions regardless of TAR ordering.
@@ -58,6 +77,21 @@ from consumer records; absent supported records produce unknown placeholders,
 not empty evidence presented as a clean scan. Canonical output retains the full
 coverage/provenance record; consumer output intentionally carries only each
 checker's accepted fields. Preserve the process exit code as well as the output.
+
+Consumer schemas do not accept the canonical generation/tool envelope, so these
+fields are never inserted into their records. Use `--receipt PATH` with a consumer
+export to retain the canonical inventory alongside it. The receipt includes
+`consumer`, `export_sha256` (the SHA-256 of the exact exported UTF-8 JSON bytes,
+including the final newline), and `inventory`. It contains no input/output path
+or hostname. CLI stdout is written as UTF-8 bytes without platform newline
+translation, so a redirected export has the same hash on Windows and POSIX.
+The two output paths must be distinct and each uses the same
+protected no-clobber/explicit-force policy. The receipt is published first;
+publication of two files is not transactional. If interruption or output failure
+leaves only the receipt, compare its `export_sha256` with the consumer bytes
+actually received before associating them. Neither publication is retried after
+either begins. A receipt for incomplete input retains `complete=false`; the
+consumer retains its existing unknown placeholder policy and exit code.
 
 ## Supported formats and bounds
 
