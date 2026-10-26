@@ -83,7 +83,9 @@ fields are never inserted into their records. Use `--receipt PATH` with a consum
 export to retain the canonical inventory alongside it. The receipt includes
 `consumer`, `export_sha256` (the SHA-256 of the exact exported UTF-8 JSON bytes,
 including the final newline), and `inventory`. It contains no input/output path
-or hostname. The two output paths must be distinct and each uses the same
+or hostname. CLI stdout is written as UTF-8 bytes without platform newline
+translation, so a redirected export has the same hash on Windows and POSIX.
+The two output paths must be distinct and each uses the same
 protected no-clobber/explicit-force policy. The receipt is published first;
 publication of two files is not transactional. If interruption or output failure
 leaves only the receipt, compare its `export_sha256` with the consumer bytes

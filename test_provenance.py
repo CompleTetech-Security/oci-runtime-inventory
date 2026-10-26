@@ -135,6 +135,41 @@ class ProvenanceTests(unittest.TestCase):
             code, text, _ = self.run_cli(["--sbom", str(source)], invalid)
             self.assertEqual((2, ""), (code, text))
 
+    def test_receipt_staging_interrupt_preserves_exit_and_removes_private_temporary(self):
+        source = Path(__file__).parent / "examples/inventory.sbom.json"
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = Path(directory) / "receipt.json"
+            output = Path(directory) / "consumer.json"
+            output.write_text("existing evidence", encoding="utf-8")
+            with mock.patch.object(c.os, "fsync", side_effect=KeyboardInterrupt):
+                code, text, _ = self.run_cli(["--sbom", str(source), "--consumer", "sharp", "--receipt", str(receipt),
+                                              "--output", str(output), "--force"], datetime(2026, 1, 2, tzinfo=timezone.utc))
+            self.assertEqual((130, ""), (code, text))
+            self.assertFalse(receipt.exists())
+            self.assertEqual("existing evidence", output.read_text(encoding="utf-8"))
+            self.assertEqual([], list(Path(directory).glob(".oci-report-*")))
+
+    def test_stdout_receipt_hash_matches_raw_utf8_bytes_despite_text_translation(self):
+        source = Path(__file__).parent / "examples/inventory.sbom.json"
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = Path(directory) / "translated-receipt.json"
+            raw = io.BytesIO()
+            translated = io.TextIOWrapper(raw, encoding="utf-16", newline="\r\n")
+            with contextlib.redirect_stdout(translated), contextlib.redirect_stderr(io.StringIO()):
+                code = c.main(["--sbom", str(source), "--consumer", "sharp", "--receipt", str(receipt)])
+            translated.flush()
+            output_bytes = raw.getvalue()
+            self.assertEqual(0, code)
+            self.assertEqual(hashlib.sha256(output_bytes).hexdigest(), json.loads(receipt.read_text(encoding="utf-8"))["export_sha256"])
+            self.assertNotIn(b"\r", output_bytes)
+            self.assertIsInstance(json.loads(output_bytes.decode("utf-8")), dict)
+            # Real redirected process stdout is captured as bytes on every CI OS.
+            receipt = Path(directory) / "process-receipt.json"
+            result = subprocess.run([sys.executable, c.__file__, "--sbom", str(source), "--consumer", "sharp", "--receipt", str(receipt)],
+                                    capture_output=True, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(hashlib.sha256(result.stdout).hexdigest(), json.loads(receipt.read_text(encoding="utf-8"))["export_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -615,7 +615,14 @@ def publish(data, output, force, state):
     text = serialized(data)
     if output is None:
         state["stdout_started"] = True
-        sys.stdout.write(text)
+        binary = getattr(sys.stdout, "buffer", None)
+        if binary is not None:
+            # Receipt hashes cover these exact UTF-8 bytes, not platform text translation.
+            binary.write(text.encode("utf-8"))
+            binary.flush()
+        else:
+            # In-memory text streams used by embedders have no byte channel.
+            sys.stdout.write(text)
         state["published"] = True
         return
     staged = None
@@ -676,7 +683,7 @@ def main(argv=None, *, clock=None):
                            export_sha256=hashlib.sha256(serialized(exported).encode("utf-8")).hexdigest(), inventory=report)
             # Either artifact may survive interruption; never retry a partially published pair.
             state["publication_started"] = True
-            publish(receipt, args.receipt, args.force, {})
+            publish(receipt, args.receipt, args.force, {"published": False, "publication_started": False})
         publish(exported, args.output, args.force, state)
     try:
         validate_output(args.output, ([args.archive] if args.archive else []) + args.sbom, args.force)
